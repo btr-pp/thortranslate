@@ -70,6 +70,9 @@ dependencies {
     // ML Kit - Japanese text recognition
     implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
 
+    // ML Kit - Latin-script text recognition (for English dictionary mode)
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+
     // ML Kit - On-device translation
     implementation("com.google.mlkit:translate:17.0.3")
 

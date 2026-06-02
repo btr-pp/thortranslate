@@ -15,6 +15,7 @@ class AppSettings(context: Context) {
         private const val KEY_APP_MODE = "app_mode"
         private const val KEY_TRANSLATE_STYLE = "translate_style"
         private const val KEY_AI_MODEL = "ai_model"
+        private const val KEY_DICT_LANGUAGE = "dict_language"
 
         const val TEXT_SIZE_SMALL = 0
         const val TEXT_SIZE_MEDIUM = 1
@@ -31,6 +32,10 @@ class AppSettings(context: Context) {
         const val MODEL_GEMINI_FLASH = 1
         const val MODEL_MLKIT_OFFLINE = 2
         const val MODEL_MLKIT_OFFLINE_AUTO = 3
+
+        // Dictionary source language (which dictionary + OCR script to use)
+        const val DICT_LANG_JAPANESE = "ja"
+        const val DICT_LANG_ENGLISH = "en"
 
         private const val KEY_OUTPUT_LANGUAGE = "output_language"
         private const val KEY_CROP_LEFT = "crop_left"
@@ -88,6 +93,9 @@ class AppSettings(context: Context) {
 
     private val _outputLanguage = MutableStateFlow(prefs.getString(KEY_OUTPUT_LANGUAGE, LANG_ENGLISH) ?: LANG_ENGLISH)
     val outputLanguage: StateFlow<String> = _outputLanguage
+
+    private val _dictLanguage = MutableStateFlow(prefs.getString(KEY_DICT_LANGUAGE, DICT_LANG_JAPANESE) ?: DICT_LANG_JAPANESE)
+    val dictLanguage: StateFlow<String> = _dictLanguage
 
     // Crop region stored as percentages (0f..1f)
     private val _cropEnabled = MutableStateFlow(prefs.getBoolean(KEY_CROP_ENABLED, false))
@@ -164,5 +172,10 @@ class AppSettings(context: Context) {
     fun setOutputLanguage(lang: String) {
         _outputLanguage.value = lang
         prefs.edit().putString(KEY_OUTPUT_LANGUAGE, lang).apply()
+    }
+
+    fun setDictLanguage(lang: String) {
+        _dictLanguage.value = lang
+        prefs.edit().putString(KEY_DICT_LANGUAGE, lang).apply()
     }
 }

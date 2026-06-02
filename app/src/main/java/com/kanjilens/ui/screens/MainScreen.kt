@@ -43,6 +43,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.kanjilens.analysis.DictionaryLookup
+import com.kanjilens.analysis.EnglishDictionaryLookup
+import com.kanjilens.analysis.EnglishTokenizer
 import com.kanjilens.analysis.JapaneseTokenizer
 import com.kanjilens.capture.ScreenCaptureManager
 import com.kanjilens.capture.ScreenCaptureService
@@ -50,6 +52,7 @@ import com.kanjilens.data.models.AnalysisResult
 import com.kanjilens.data.models.AppSettings
 import com.kanjilens.data.models.CaptureState
 import com.kanjilens.data.models.TranslationResult
+import com.kanjilens.data.models.WordEntry
 import com.kanjilens.ocr.TextRecognizer
 import com.kanjilens.translate.ScreenTranslator
 import com.kanjilens.translate.TranslateResult
@@ -68,6 +71,8 @@ fun MainScreen(
     textRecognizer: TextRecognizer,
     tokenizer: JapaneseTokenizer,
     dictionary: DictionaryLookup,
+    englishTokenizer: EnglishTokenizer,
+    englishDictionary: EnglishDictionaryLookup,
     translator: ScreenTranslator,
     settings: AppSettings,
     dictionaryState: CaptureState,
@@ -87,6 +92,7 @@ fun MainScreen(
     val openaiKey by settings.openaiApiKey.collectAsState()
     val geminiKey by settings.geminiApiKey.collectAsState()
     val outputLanguage by settings.outputLanguage.collectAsState()
+    val dictLanguage by settings.dictLanguage.collectAsState()
     val cropEnabled by settings.cropEnabled.collectAsState()
     val apiKey = when (aiModel) {
         AppSettings.MODEL_GEMINI_FLASH -> geminiKey
@@ -137,6 +143,68 @@ fun MainScreen(
         onDictionaryStateChange
     }
 
+    val onDownloadingModel = { onDictionaryStateChange(CaptureState.DownloadingModel) }
+
+    // JP dictionary (字典優先, 二次翻譯): JMDict gives English meanings; translate
+    // them to the output language via ML Kit. Tokens missing from JMDict fall back
+    // to translating the Japanese surface directly.
+    suspend fun lookupJapanese(recognizedText: String): List<WordEntry> {
+        val tokens = tokenizer.tokenize(recognizedText)
+        val baseWords = dictionary.lookupTokens(tokens)
+        if (outputLanguage == AppSettings.LANG_ENGLISH) return baseWords
+
+        val englishMeanings = baseWords.filter { it.meaning.isNotBlank() }.map { it.meaning }
+        val notFoundSurfaces = baseWords.filter { it.meaning.isBlank() }.map { it.surface }
+        val meaningTr = if (englishMeanings.isNotEmpty()) {
+            translator.translateBatch(englishMeanings, AppSettings.LANG_ENGLISH, outputLanguage, onDownloadingModel)
+        } else emptyMap()
+        val surfaceTr = if (notFoundSurfaces.isNotEmpty()) {
+            translator.translateBatch(notFoundSurfaces, AppSettings.DICT_LANG_JAPANESE, outputLanguage, onDownloadingModel)
+        } else emptyMap()
+
+        return baseWords.map { w ->
+            val meaning = if (w.meaning.isNotBlank()) {
+                meaningTr[w.meaning] ?: w.meaning
+            } else {
+                surfaceTr[w.surface] ?: ""
+            }
+            w.copy(meaning = meaning)
+        }
+    }
+
+    // EN dictionary (ECDICT): Chinese translation / KK phonetic / exam tag are
+    // ready-made. Use them directly for zh output; use the English definition for
+    // en output; otherwise translate the word via ML Kit. Words missing from
+    // ECDICT fall back to ML Kit (except for en output, which leaves them blank).
+    suspend fun lookupEnglish(recognizedText: String): List<WordEntry> {
+        val words = englishTokenizer.tokenize(recognizedText).distinctBy { it.lowercase() }
+        val needTranslate = when (outputLanguage) {
+            AppSettings.LANG_ENGLISH -> emptyList()
+            AppSettings.LANG_CHINESE -> words.filter { englishDictionary.lookup(it) == null }
+            else -> words
+        }
+        val translations = if (needTranslate.isNotEmpty()) {
+            translator.translateBatch(needTranslate, AppSettings.DICT_LANG_ENGLISH, outputLanguage, onDownloadingModel)
+        } else emptyMap()
+
+        return words.map { word ->
+            val entry = englishDictionary.lookup(word)
+            val meaning = when (outputLanguage) {
+                AppSettings.LANG_ENGLISH ->
+                    entry?.definition?.takeIf { it.isNotBlank() } ?: entry?.translation ?: ""
+                AppSettings.LANG_CHINESE ->
+                    entry?.translation?.takeIf { it.isNotBlank() } ?: translations[word] ?: ""
+                else -> translations[word] ?: ""
+            }
+            WordEntry(
+                surface = word,
+                reading = entry?.phonetic ?: "",
+                meaning = meaning,
+                jlptLevel = entry?.tag?.takeIf { it.isNotBlank() },
+            )
+        }
+    }
+
     fun doDictionaryCapture() {
         scope.launch {
             onDictionaryStateChange(CaptureState.Capturing)
@@ -149,11 +217,11 @@ fun MainScreen(
             val bitmap = cropBitmap(fullBitmap)
             onDictionaryStateChange(CaptureState.Processing)
 
-            val recognizedText = textRecognizer.recognizeText(bitmap)
+            val isEnglish = dictLanguage == AppSettings.DICT_LANG_ENGLISH
+            val script = if (isEnglish) TextRecognizer.SCRIPT_LATIN else TextRecognizer.SCRIPT_JAPANESE
+            val recognizedText = textRecognizer.recognizeText(bitmap, script)
             if (recognizedText != null) {
-                val tokens = tokenizer.tokenize(recognizedText)
-                val words = dictionary.lookupTokens(tokens)
-
+                val words = if (isEnglish) lookupEnglish(recognizedText) else lookupJapanese(recognizedText)
                 onDictionaryStateChange(CaptureState.DictionarySuccess(
                     AnalysisResult(
                         originalText = recognizedText,
@@ -161,7 +229,8 @@ fun MainScreen(
                     )
                 ))
             } else {
-                onDictionaryStateChange(CaptureState.Error("No Japanese text found in screenshot"))
+                val msg = if (isEnglish) "No text found in screenshot" else "No Japanese text found in screenshot"
+                onDictionaryStateChange(CaptureState.Error(msg))
             }
         }
     }
@@ -463,6 +532,15 @@ fun MainScreen(
                 onModeChange = { settings.setAppMode(it) },
             )
 
+            // Dictionary source-language sub-toggle (only in Dictionary mode)
+            if (appMode == AppSettings.MODE_DICTIONARY) {
+                Spacer(modifier = Modifier.height(8.dp))
+                DictLangToggle(
+                    currentLang = dictLanguage,
+                    onLangChange = { settings.setDictLanguage(it) },
+                )
+            }
+
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -622,9 +700,35 @@ private fun ModeToggle(
             modifier = Modifier.weight(1f),
         )
         ModeOption(
-            label = "JP Dictionary",
+            label = "Dictionary",
             selected = currentMode == AppSettings.MODE_DICTIONARY,
             onClick = { onModeChange(AppSettings.MODE_DICTIONARY) },
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun DictLangToggle(
+    currentLang: String,
+    onLangChange: (String) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        ModeOption(
+            label = "JP",
+            selected = currentLang == AppSettings.DICT_LANG_JAPANESE,
+            onClick = { onLangChange(AppSettings.DICT_LANG_JAPANESE) },
+            modifier = Modifier.weight(1f),
+        )
+        ModeOption(
+            label = "EN",
+            selected = currentLang == AppSettings.DICT_LANG_ENGLISH,
+            onClick = { onLangChange(AppSettings.DICT_LANG_ENGLISH) },
             modifier = Modifier.weight(1f),
         )
     }

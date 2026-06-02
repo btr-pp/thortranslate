@@ -10,6 +10,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.kanjilens.analysis.DictionaryLookup
+import com.kanjilens.analysis.EnglishDictionaryLookup
+import com.kanjilens.analysis.EnglishTokenizer
 import com.kanjilens.analysis.JapaneseTokenizer
 import com.kanjilens.capture.ScreenCaptureManager
 import com.kanjilens.data.models.AppSettings
@@ -28,6 +30,8 @@ class MainActivity : ComponentActivity() {
     lateinit var textRecognizer: TextRecognizer
     lateinit var tokenizer: JapaneseTokenizer
     lateinit var dictionary: DictionaryLookup
+    lateinit var englishTokenizer: EnglishTokenizer
+    lateinit var englishDictionary: EnglishDictionaryLookup
     lateinit var settings: AppSettings
     lateinit var translator: ScreenTranslator
 
@@ -38,6 +42,8 @@ class MainActivity : ComponentActivity() {
         translator = ScreenTranslator(textRecognizer)
         tokenizer = JapaneseTokenizer()
         dictionary = DictionaryLookup(this)
+        englishTokenizer = EnglishTokenizer()
+        englishDictionary = EnglishDictionaryLookup(this)
         settings = AppSettings(this)
         enableEdgeToEdge()
         setContent {
@@ -73,6 +79,8 @@ class MainActivity : ComponentActivity() {
                         textRecognizer = textRecognizer,
                         tokenizer = tokenizer,
                         dictionary = dictionary,
+                        englishTokenizer = englishTokenizer,
+                        englishDictionary = englishDictionary,
                         translator = translator,
                         settings = settings,
                         dictionaryState = dictionaryState,

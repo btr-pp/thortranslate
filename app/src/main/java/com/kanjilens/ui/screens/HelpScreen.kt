@@ -79,11 +79,16 @@ fun HelpScreen(
 
             HelpDivider()
 
-            HelpSection("JP Dictionary Mode")
+            HelpSection("Dictionary Mode")
             HelpBody(
-                "Offline Japanese word-by-word breakdown. Uses on-device OCR to read Japanese text, " +
-                "then looks up each word in a 212K-entry dictionary. Shows kanji, reading, meaning, " +
-                "and JLPT level. No internet required."
+                "Offline word-by-word breakdown. Switch between JP and EN with the toggle.\n\n" +
+                "JP: reads Japanese text, looks up each word in a built-in dictionary, and shows " +
+                "the kanji, reading, and meaning.\n\n" +
+                "EN: reads English text and looks up each word in a built-in English dictionary, " +
+                "showing the phonetic spelling, meaning, and exam tag (e.g. cet4, ielts).\n\n" +
+                "Each word's meaning follows your Output language setting. When the dictionary " +
+                "doesn't have the meaning in that language, on-device translation fills it in. " +
+                "No internet required after the first model download."
             )
 
             HelpDivider()
