@@ -1,0 +1,54 @@
+name: Build Release APK
+
+# 推一個 v 開頭的版本標籤(例如 v0.3.0)就會自動 build APK 並建立 Release。
+# 也可以到 Actions 分頁手動執行(workflow_dispatch)。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write  # 建立 Release 需要寫入權限
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # debug 簽章:用內建的 debug keystore 簽章,產出可直接安裝的 APK。
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Rename APK
+        id: rename
+        run: |
+          VERSION=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/ThorLens-v${VERSION}.apk"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ThorLens-v${{ steps.rename.outputs.version }}
+          path: dist/ThorLens-*.apk
+
+      # 只有在「推標籤」時才建立 Release(手動執行只會產出上面的 artifact)。
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ThorLens-*.apk
+          generate_release_notes: true
