@@ -619,6 +619,7 @@ fun MainScreen(
                                 val styleName = when (translateStyle) {
                                     AppSettings.TRANSLATE_STYLE_TRANSLATE_ONLY -> "translate"
                                     AppSettings.TRANSLATE_STYLE_TRANSLATE_AND_EXPLAIN -> "explain"
+                                    AppSettings.TRANSLATE_STYLE_TEXT -> "text"
                                     else -> "auto"
                                 }
                                 "Translating to $langName using $modelName ($styleName)..."

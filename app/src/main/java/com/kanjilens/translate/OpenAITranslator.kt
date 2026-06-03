@@ -153,6 +153,12 @@ class ScreenTranslator(
                     return@withContext translateGoogle(bitmap, apiKey, outputLanguage)
                 }
 
+                // Text mode: OCR first, then send only the text to the LLM (cheaper
+                // than sending the image). Applies to the GPT-4o / Gemini models.
+                if (style == AppSettings.TRANSLATE_STYLE_TEXT) {
+                    return@withContext translateLlmText(bitmap, apiKey, model, outputLanguage)
+                }
+
                 val base64Image = bitmapToBase64(bitmap)
                 val prompt = getSystemPrompt(style, outputLanguage)
 
@@ -327,6 +333,120 @@ class ScreenTranslator(
         } catch (e: Exception) {
             null
         }
+    }
+
+    /**
+     * Text-mode LLM translation: OCR the screen, then send only the recognized text
+     * (not the image) to the LLM for a plain translate-only result. Far cheaper and
+     * faster than sending the image, at the cost of losing visual/layout context.
+     */
+    private suspend fun translateLlmText(
+        bitmap: Bitmap,
+        apiKey: String,
+        model: Int,
+        outputLanguage: String,
+    ): TranslateResult {
+        val blocks = textRecognizer.recognizeTextBlocks(bitmap)
+            ?: return TranslateResult.Error("No text found in screenshot")
+        if (blocks.isEmpty()) {
+            return TranslateResult.Error("No text found in screenshot")
+        }
+
+        val text = blocks.joinToString("\n")
+        val prompt = getSystemPrompt(STYLE_TRANSLATE_ONLY, outputLanguage)
+        val result = when (model) {
+            AppSettings.MODEL_GEMINI_FLASH -> callGeminiText(text, apiKey, prompt)
+            else -> callOpenAIText(text, apiKey, prompt)
+        }
+        return if (result != null) {
+            TranslateResult.Success(result)
+        } else {
+            TranslateResult.Error("Translation failed. Check your API key.")
+        }
+    }
+
+    private fun callOpenAIText(text: String, apiKey: String, systemPrompt: String): String? {
+        val body = JSONObject().apply {
+            put("model", "gpt-4o-mini")
+            put("max_tokens", 1000)
+            put("messages", JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "system")
+                    put("content", systemPrompt)
+                })
+                put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", "Translate the following on-screen text:\n\n$text")
+                })
+            })
+        }
+
+        val request = Request.Builder()
+            .url("https://api.openai.com/v1/chat/completions")
+            .addHeader("Authorization", "Bearer $apiKey")
+            .addHeader("Content-Type", "application/json")
+            .post(body.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+
+        val response = client.newCall(request).execute()
+        val responseBody = response.body?.string()
+        if (!response.isSuccessful) {
+            throw TranslateApiException(httpErrorMessage(response.code, responseBody))
+        }
+        if (responseBody == null) return null
+
+        val json = JSONObject(responseBody)
+        val choices = json.getJSONArray("choices")
+        return if (choices.length() > 0) {
+            choices.getJSONObject(0)
+                .getJSONObject("message")
+                .getString("content")
+        } else null
+    }
+
+    private fun callGeminiText(text: String, apiKey: String, systemPrompt: String): String? {
+        val body = JSONObject().apply {
+            put("system_instruction", JSONObject().apply {
+                put("parts", JSONArray().apply {
+                    put(JSONObject().apply { put("text", systemPrompt) })
+                })
+            })
+            put("contents", JSONArray().apply {
+                put(JSONObject().apply {
+                    put("parts", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("text", "Translate the following on-screen text:\n\n$text")
+                        })
+                    })
+                })
+            })
+            put("generationConfig", JSONObject().apply {
+                put("maxOutputTokens", 1000)
+            })
+        }
+
+        val request = Request.Builder()
+            .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey")
+            .addHeader("Content-Type", "application/json")
+            .post(body.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+
+        val response = client.newCall(request).execute()
+        val responseBody = response.body?.string()
+        if (!response.isSuccessful) {
+            throw TranslateApiException(httpErrorMessage(response.code, responseBody))
+        }
+        if (responseBody == null) return null
+
+        val json = JSONObject(responseBody)
+        val candidates = json.optJSONArray("candidates") ?: return null
+        if (candidates.length() == 0) return null
+
+        return candidates.getJSONObject(0)
+            .getJSONObject("content")
+            .getJSONArray("parts")
+            .getJSONObject(0)
+            .getString("text")
     }
 
     private fun callOpenAI(base64Image: String, apiKey: String, systemPrompt: String): String? {
