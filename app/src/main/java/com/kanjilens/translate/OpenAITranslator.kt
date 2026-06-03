@@ -146,6 +146,10 @@ class ScreenTranslator(
                     return@withContext translateOffline(bitmap, outputLanguage, onDownloading)
                 }
 
+                if (model == AppSettings.MODEL_GOOGLE_TRANSLATE) {
+                    return@withContext translateGoogle(bitmap, apiKey, outputLanguage)
+                }
+
                 val base64Image = bitmapToBase64(bitmap)
                 val prompt = getSystemPrompt(style, outputLanguage)
 
@@ -223,6 +227,75 @@ class ScreenTranslator(
             } catch (e: Exception) {
                 TranslateResult.Error("Offline translation failed: ${e.message ?: "unknown error"}")
             }
+        }
+    }
+
+    /**
+     * Online translation via Google Cloud Translation API v2 (REST). Recognizes the
+     * on-screen text blocks, sends them in a single request, and interleaves each
+     * original line with its translation — same output shape as the offline path so
+     * the UI renders both identically. The source language is auto-detected.
+     */
+    private suspend fun translateGoogle(
+        bitmap: Bitmap,
+        apiKey: String,
+        outputLanguage: String = AppSettings.LANG_ENGLISH,
+    ): TranslateResult {
+        val blocks = textRecognizer.recognizeTextBlocks(bitmap)
+            ?: return TranslateResult.Error("No text found in screenshot")
+        if (blocks.isEmpty()) {
+            return TranslateResult.Error("No text found in screenshot")
+        }
+
+        val translations = callGoogleTranslate(blocks, apiKey, outputLanguage)
+            ?: return TranslateResult.Error("Translation failed. Check your API key.")
+
+        val result = StringBuilder()
+        for (i in blocks.indices) {
+            result.appendLine(blocks[i])
+            result.appendLine(translations.getOrElse(i) { "" })
+            result.appendLine()
+        }
+        return TranslateResult.Success(result.toString().trimEnd())
+    }
+
+    private fun callGoogleTranslate(
+        texts: List<String>,
+        apiKey: String,
+        outputLanguage: String,
+    ): List<String>? {
+        val body = JSONObject().apply {
+            put("q", JSONArray().apply { texts.forEach { put(it) } })
+            put("target", googleLanguageCode(outputLanguage))
+            put("format", "text")
+            // source omitted -> Google auto-detects (screen text can be any language)
+        }
+
+        val request = Request.Builder()
+            .url("https://translation.googleapis.com/language/translate/v2?key=$apiKey")
+            .addHeader("Content-Type", "application/json")
+            .post(body.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+
+        val response = client.newCall(request).execute()
+        val responseBody = response.body?.string() ?: return null
+        if (!response.isSuccessful) return null
+
+        val translations = JSONObject(responseBody)
+            .optJSONObject("data")
+            ?.optJSONArray("translations")
+            ?: return null
+        return (0 until translations.length()).map {
+            translations.getJSONObject(it).optString("translatedText", "")
+        }
+    }
+
+    private fun googleLanguageCode(appLangCode: String): String {
+        // App codes are ISO-639-1, matching Google's codes except Chinese, where we
+        // target Traditional Chinese.
+        return when (appLangCode) {
+            AppSettings.LANG_CHINESE -> "zh-TW"
+            else -> appLangCode
         }
     }
 
