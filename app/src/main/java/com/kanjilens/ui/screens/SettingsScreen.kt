@@ -49,15 +49,21 @@ fun SettingsScreen(
     val textSize by settings.textSize.collectAsState()
     val openaiApiKey by settings.openaiApiKey.collectAsState()
     val geminiApiKey by settings.geminiApiKey.collectAsState()
+    val googleApiKey by settings.googleApiKey.collectAsState()
     val translateStyle by settings.translateStyle.collectAsState()
     val aiModel by settings.aiModel.collectAsState()
     val outputLanguage by settings.outputLanguage.collectAsState()
 
     var openaiKeyInput by remember { mutableStateOf(openaiApiKey) }
     var geminiKeyInput by remember { mutableStateOf(geminiApiKey) }
+    var googleKeyInput by remember { mutableStateOf(googleApiKey) }
     var showApiKey by remember { mutableStateOf(false) }
 
-    val apiKeyInput = if (aiModel == AppSettings.MODEL_GEMINI_FLASH) geminiKeyInput else openaiKeyInput
+    val apiKeyInput = when (aiModel) {
+        AppSettings.MODEL_GEMINI_FLASH -> geminiKeyInput
+        AppSettings.MODEL_GOOGLE_TRANSLATE -> googleKeyInput
+        else -> openaiKeyInput
+    }
 
     Scaffold(
         topBar = {
@@ -144,6 +150,12 @@ fun SettingsScreen(
                         onClick = { settings.setAiModel(AppSettings.MODEL_GPT4O_MINI) },
                         modifier = Modifier.weight(1f),
                     )
+                    SettingsOption(
+                        label = "Google",
+                        selected = aiModel == AppSettings.MODEL_GOOGLE_TRANSLATE,
+                        onClick = { settings.setAiModel(AppSettings.MODEL_GOOGLE_TRANSLATE) },
+                        modifier = Modifier.weight(1f),
+                    )
                 }
                 if (aiModel == AppSettings.MODEL_MLKIT_OFFLINE || aiModel == AppSettings.MODEL_MLKIT_OFFLINE_AUTO) {
                     Text(
@@ -198,10 +210,13 @@ fun SettingsScreen(
                 }
             }
 
-            if (aiModel != AppSettings.MODEL_MLKIT_OFFLINE && aiModel != AppSettings.MODEL_MLKIT_OFFLINE_AUTO) {
+            if (aiModel != AppSettings.MODEL_MLKIT_OFFLINE &&
+                aiModel != AppSettings.MODEL_MLKIT_OFFLINE_AUTO &&
+                aiModel != AppSettings.MODEL_GOOGLE_TRANSLATE
+            ) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
 
-                // Translation Style (only for AI models, below AI Model)
+                // Translation Style (only for vision LLM models, below AI Model)
                 SettingsSection(title = "Translation Style") {
                     Text(
                         text = "Controls how Translate mode responds",
@@ -239,20 +254,20 @@ fun SettingsScreen(
                 HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
 
                 // API Key
-                val keyLabel = if (aiModel == AppSettings.MODEL_GEMINI_FLASH) {
-                    "Google AI API Key"
-                } else {
-                    "OpenAI API Key"
+                val keyLabel = when (aiModel) {
+                    AppSettings.MODEL_GEMINI_FLASH -> "Google AI API Key"
+                    AppSettings.MODEL_GOOGLE_TRANSLATE -> "Cloud Translation API Key"
+                    else -> "OpenAI API Key"
                 }
-                val keyHint = if (aiModel == AppSettings.MODEL_GEMINI_FLASH) {
-                    "Get your key at aistudio.google.com"
-                } else {
-                    "Get your key at platform.openai.com"
+                val keyHint = when (aiModel) {
+                    AppSettings.MODEL_GEMINI_FLASH -> "Get your key at aistudio.google.com"
+                    AppSettings.MODEL_GOOGLE_TRANSLATE ->
+                        "Enable the Cloud Translation API and create a key at console.cloud.google.com"
+                    else -> "Get your key at platform.openai.com"
                 }
-                val keyPlaceholder = if (aiModel == AppSettings.MODEL_GEMINI_FLASH) {
-                    "AIza..."
-                } else {
-                    "sk-..."
+                val keyPlaceholder = when (aiModel) {
+                    AppSettings.MODEL_GEMINI_FLASH, AppSettings.MODEL_GOOGLE_TRANSLATE -> "AIza..."
+                    else -> "sk-..."
                 }
 
                 SettingsSection(title = keyLabel) {
@@ -265,12 +280,19 @@ fun SettingsScreen(
                     OutlinedTextField(
                         value = apiKeyInput,
                         onValueChange = {
-                            if (aiModel == AppSettings.MODEL_GEMINI_FLASH) {
-                                geminiKeyInput = it
-                                settings.setGeminiApiKey(it)
-                            } else {
-                                openaiKeyInput = it
-                                settings.setOpenaiApiKey(it)
+                            when (aiModel) {
+                                AppSettings.MODEL_GEMINI_FLASH -> {
+                                    geminiKeyInput = it
+                                    settings.setGeminiApiKey(it)
+                                }
+                                AppSettings.MODEL_GOOGLE_TRANSLATE -> {
+                                    googleKeyInput = it
+                                    settings.setGoogleApiKey(it)
+                                }
+                                else -> {
+                                    openaiKeyInput = it
+                                    settings.setOpenaiApiKey(it)
+                                }
                             }
                         },
                         placeholder = { Text(keyPlaceholder) },

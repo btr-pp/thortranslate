@@ -12,6 +12,7 @@ class AppSettings(context: Context) {
         private const val KEY_TEXT_SIZE = "text_size"
         private const val KEY_OPENAI_API_KEY = "openai_api_key_v2"
         private const val KEY_GEMINI_API_KEY = "gemini_api_key"
+        private const val KEY_GOOGLE_API_KEY = "google_api_key"
         private const val KEY_APP_MODE = "app_mode"
         private const val KEY_TRANSLATE_STYLE = "translate_style"
         private const val KEY_AI_MODEL = "ai_model"
@@ -32,6 +33,7 @@ class AppSettings(context: Context) {
         const val MODEL_GEMINI_FLASH = 1
         const val MODEL_MLKIT_OFFLINE = 2
         const val MODEL_MLKIT_OFFLINE_AUTO = 3
+        const val MODEL_GOOGLE_TRANSLATE = 4
 
         // Dictionary source language (which dictionary + OCR script to use)
         const val DICT_LANG_JAPANESE = "ja"
@@ -81,6 +83,9 @@ class AppSettings(context: Context) {
 
     private val _geminiApiKey = MutableStateFlow(prefs.getString(KEY_GEMINI_API_KEY, "") ?: "")
     val geminiApiKey: StateFlow<String> = _geminiApiKey
+
+    private val _googleApiKey = MutableStateFlow(prefs.getString(KEY_GOOGLE_API_KEY, "") ?: "")
+    val googleApiKey: StateFlow<String> = _googleApiKey
 
     private val _appMode = MutableStateFlow(prefs.getInt(KEY_APP_MODE, MODE_TRANSLATE))
     val appMode: StateFlow<Int> = _appMode
@@ -135,6 +140,7 @@ class AppSettings(context: Context) {
     val activeApiKey: String
         get() = when (_aiModel.value) {
             MODEL_GEMINI_FLASH -> _geminiApiKey.value
+            MODEL_GOOGLE_TRANSLATE -> _googleApiKey.value
             MODEL_MLKIT_OFFLINE, MODEL_MLKIT_OFFLINE_AUTO -> ""
             else -> _openaiApiKey.value
         }
@@ -152,6 +158,11 @@ class AppSettings(context: Context) {
     fun setGeminiApiKey(key: String) {
         _geminiApiKey.value = key
         prefs.edit().putString(KEY_GEMINI_API_KEY, key).apply()
+    }
+
+    fun setGoogleApiKey(key: String) {
+        _googleApiKey.value = key
+        prefs.edit().putString(KEY_GOOGLE_API_KEY, key).apply()
     }
 
     fun setAppMode(mode: Int) {

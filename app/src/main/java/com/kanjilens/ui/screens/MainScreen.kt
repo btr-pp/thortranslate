@@ -93,11 +93,13 @@ fun MainScreen(
     val aiModel by settings.aiModel.collectAsState()
     val openaiKey by settings.openaiApiKey.collectAsState()
     val geminiKey by settings.geminiApiKey.collectAsState()
+    val googleKey by settings.googleApiKey.collectAsState()
     val outputLanguage by settings.outputLanguage.collectAsState()
     val dictLanguage by settings.dictLanguage.collectAsState()
     val cropEnabled by settings.cropEnabled.collectAsState()
     val apiKey = when (aiModel) {
         AppSettings.MODEL_GEMINI_FLASH -> geminiKey
+        AppSettings.MODEL_GOOGLE_TRANSLATE -> googleKey
         AppSettings.MODEL_MLKIT_OFFLINE, AppSettings.MODEL_MLKIT_OFFLINE_AUTO -> ""
         else -> openaiKey
     }
@@ -411,6 +413,7 @@ fun MainScreen(
         AppSettings.MODEL_GEMINI_FLASH -> "Gemini"
         AppSettings.MODEL_MLKIT_OFFLINE -> "Offline"
         AppSettings.MODEL_MLKIT_OFFLINE_AUTO -> "Auto"
+        AppSettings.MODEL_GOOGLE_TRANSLATE -> "Google"
         else -> "GPT-4o"
     }
 
@@ -508,6 +511,14 @@ fun MainScreen(
                                     modelMenuExpanded = false
                                 },
                             )
+                            DropdownMenuItem(
+                                text = { Text("Google Translate") },
+                                onClick = {
+                                    stopAutoMode()
+                                    settings.setAiModel(AppSettings.MODEL_GOOGLE_TRANSLATE)
+                                    modelMenuExpanded = false
+                                },
+                            )
                         }
                     }
                     IconButton(onClick = onHelpClick) {
@@ -595,7 +606,10 @@ fun MainScreen(
                     is CaptureState.Processing -> {
                         val langName = AppSettings.languageDisplayName(outputLanguage)
                         val label = if (appMode == AppSettings.MODE_TRANSLATE) {
-                            if (aiModel == AppSettings.MODEL_MLKIT_OFFLINE || aiModel == AppSettings.MODEL_MLKIT_OFFLINE_AUTO) {
+                            if (aiModel == AppSettings.MODEL_MLKIT_OFFLINE ||
+                                aiModel == AppSettings.MODEL_MLKIT_OFFLINE_AUTO ||
+                                aiModel == AppSettings.MODEL_GOOGLE_TRANSLATE
+                            ) {
                                 "Translating to $langName..."
                             } else {
                                 val modelName = when (aiModel) {
@@ -630,8 +644,11 @@ fun MainScreen(
                             AppSettings.TEXT_SIZE_LARGE -> 20.sp
                             else -> 16.sp
                         }
-                        if (aiModel == AppSettings.MODEL_MLKIT_OFFLINE || aiModel == AppSettings.MODEL_MLKIT_OFFLINE_AUTO) {
-                            // Offline: show blocks with JP original + EN translation
+                        if (aiModel == AppSettings.MODEL_MLKIT_OFFLINE ||
+                            aiModel == AppSettings.MODEL_MLKIT_OFFLINE_AUTO ||
+                            aiModel == AppSettings.MODEL_GOOGLE_TRANSLATE
+                        ) {
+                            // Offline / Google: show blocks with original + translation
                             Column {
                                 val lines = state.result.translation.split("\n")
                                 var i = 0
