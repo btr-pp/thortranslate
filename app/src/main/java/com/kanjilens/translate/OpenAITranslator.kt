@@ -177,7 +177,19 @@ class ScreenTranslator(
     ): TranslateResult {
         val blocks = textRecognizer.recognizeTextBlocks(bitmap)
             ?: return TranslateResult.Error("No text found in screenshot")
+        return translateBlocksOffline(blocks, outputLanguage, onDownloading)
+    }
 
+    /**
+     * Translates already-recognized OCR text blocks with the offline ML Kit model.
+     * Exposed so callers that already ran OCR (e.g. the auto-translate dedup loop)
+     * can reuse their blocks instead of recognizing the same bitmap twice.
+     */
+    suspend fun translateBlocksOffline(
+        blocks: List<String>,
+        outputLanguage: String = AppSettings.LANG_ENGLISH,
+        onDownloading: (() -> Unit)? = null,
+    ): TranslateResult {
         if (blocks.isEmpty()) {
             return TranslateResult.Error("No text found in screenshot")
         }
@@ -198,17 +210,19 @@ class ScreenTranslator(
         val translator = mlKitTranslator
             ?: return TranslateResult.Error("Offline translator not available")
 
-        return try {
-            val result = StringBuilder()
-            for (block in blocks) {
-                val translated = translator.translate(block).await()
-                result.appendLine(block)
-                result.appendLine(translated)
-                result.appendLine()
+        return withContext(Dispatchers.IO) {
+            try {
+                val result = StringBuilder()
+                for (block in blocks) {
+                    val translated = translator.translate(block).await()
+                    result.appendLine(block)
+                    result.appendLine(translated)
+                    result.appendLine()
+                }
+                TranslateResult.Success(result.toString().trimEnd())
+            } catch (e: Exception) {
+                TranslateResult.Error("Offline translation failed: ${e.message ?: "unknown error"}")
             }
-            TranslateResult.Success(result.toString().trimEnd())
-        } catch (e: Exception) {
-            TranslateResult.Error("Offline translation failed: ${e.message ?: "unknown error"}")
         }
     }
 

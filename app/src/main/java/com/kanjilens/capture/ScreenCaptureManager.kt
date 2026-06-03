@@ -70,6 +70,9 @@ class ScreenCaptureManager(private val context: Context) {
         val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
         imageReader = reader
 
+        // Hold this capture's own display/reader in locals so cleanup never touches
+        // resources belonging to another (possibly concurrent) capture.
+        var display: VirtualDisplay? = null
         var captured = false
 
         reader.setOnImageAvailableListener({ imgReader ->
@@ -83,18 +86,13 @@ class ScreenCaptureManager(private val context: Context) {
 
                     // Clean up VirtualDisplay and ImageReader after capture
                     // Keep MediaProjection alive for next capture
-                    virtualDisplay?.release()
+                    display?.release()
                     reader.close()
-                    virtualDisplay = null
-                    imageReader = null
-
                     continuation.resume(bitmap)
                 } else {
                     Log.e(TAG, "acquireLatestImage returned null")
-                    virtualDisplay?.release()
+                    display?.release()
                     reader.close()
-                    virtualDisplay = null
-                    imageReader = null
                     continuation.resume(null)
                 }
             }
@@ -102,7 +100,7 @@ class ScreenCaptureManager(private val context: Context) {
 
         // Create VirtualDisplay AFTER setting the listener
         try {
-            val display = projection.createVirtualDisplay(
+            display = projection.createVirtualDisplay(
                 "KanjiLensCapture",
                 width, height, density,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
@@ -114,15 +112,12 @@ class ScreenCaptureManager(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create VirtualDisplay", e)
             reader.close()
-            imageReader = null
             continuation.resume(null)
         }
 
         continuation.invokeOnCancellation {
-            virtualDisplay?.release()
+            display?.release()
             reader.close()
-            virtualDisplay = null
-            imageReader = null
         }
     }
 
