@@ -20,6 +20,19 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Fixed debug keystore committed to the repo so CI-built APKs share a
+    // stable signature across releases; without this each GitHub Actions run
+    // would generate a new ~/.android/debug.keystore and Android would reject
+    // the upgrade with "package conflicts with existing package".
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
