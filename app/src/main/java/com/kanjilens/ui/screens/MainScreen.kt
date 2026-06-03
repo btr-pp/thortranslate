@@ -28,6 +28,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,6 +63,7 @@ import com.kanjilens.ui.components.CaptureButton
 import com.kanjilens.ui.components.TranslationResultView
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -276,40 +278,41 @@ fun MainScreen(
         }
     }
 
-    fun doAutoTranslateCycle() {
-        scope.launch {
-            val fullBitmap = captureManager.captureScreen() ?: return@launch
+    // Runs a single auto cycle. Suspends until the capture/OCR/translation finishes
+    // so the caller can serialize cycles — overlapping cycles would race on the
+    // shared ScreenCaptureManager state and stall, breaking auto updates.
+    suspend fun doAutoTranslateCycle() {
+        val fullBitmap = captureManager.captureScreen() ?: return
 
-            val bitmap = cropBitmap(fullBitmap)
+        val bitmap = cropBitmap(fullBitmap)
 
-            // Get OCR text first for dedup
-            val blocks = textRecognizer.recognizeTextBlocks(bitmap)
-            if (blocks.isNullOrEmpty()) return@launch
+        // Get OCR text first for dedup
+        val blocks = textRecognizer.recognizeTextBlocks(bitmap)
+        if (blocks.isNullOrEmpty()) return
 
-            val currentText = blocks.joinToString("")
-                .filter { c -> c.code > 0x3000 } // Keep only CJK chars for dedup
+        val currentText = blocks.joinToString("")
+            .filter { c -> c.code > 0x3000 } // Keep only CJK chars for dedup
 
-            if (currentText.isEmpty()) return@launch
+        if (currentText.isEmpty()) return
 
-            if (!isSignificantChange(lastOcrText ?: "", currentText)) {
-                return@launch // Text hasn't changed, skip
+        if (!isSignificantChange(lastOcrText ?: "", currentText)) {
+            return // Text hasn't changed, skip
+        }
+        lastOcrText = currentText
+
+        onTranslateStateChange(CaptureState.Processing)
+
+        when (val result = translator.translateScreen(
+            bitmap, "", AppSettings.TRANSLATE_STYLE_AUTO, AppSettings.MODEL_MLKIT_OFFLINE, outputLanguage,
+            onDownloading = { onTranslateStateChange(CaptureState.DownloadingModel) },
+        )) {
+            is TranslateResult.Success -> {
+                onTranslateStateChange(CaptureState.TranslateSuccess(
+                    TranslationResult(translation = result.text)
+                ))
             }
-            lastOcrText = currentText
-
-            onTranslateStateChange(CaptureState.Processing)
-
-            when (val result = translator.translateScreen(
-                bitmap, "", AppSettings.TRANSLATE_STYLE_AUTO, AppSettings.MODEL_MLKIT_OFFLINE, outputLanguage,
-                onDownloading = { onTranslateStateChange(CaptureState.DownloadingModel) },
-            )) {
-                is TranslateResult.Success -> {
-                    onTranslateStateChange(CaptureState.TranslateSuccess(
-                        TranslationResult(translation = result.text)
-                    ))
-                }
-                is TranslateResult.Error -> {
-                    onTranslateStateChange(CaptureState.Error(result.message))
-                }
+            is TranslateResult.Error -> {
+                onTranslateStateChange(CaptureState.Error(result.message))
             }
         }
     }
@@ -318,12 +321,22 @@ fun MainScreen(
         if (autoJob?.isActive == true) return
         lastOcrText = null
         autoJob = scope.launch {
-            while (true) {
+            // await each cycle before the next so only one capture runs at a time
+            while (isActive) {
                 if (captureManager.isReady) {
                     doAutoTranslateCycle()
                 }
                 delay(1000L)
             }
+        }
+    }
+
+    // Navigating away disposes this composable and cancels the coroutine scope (and
+    // autoJob). When we return while still in Auto mode with projection ready, resume
+    // the loop so updates keep flowing instead of silently stopping.
+    LaunchedEffect(isAutoMode, captureManager.isReady) {
+        if (isAutoMode && captureManager.isReady && autoJob?.isActive != true) {
+            startAutoMode()
         }
     }
 
