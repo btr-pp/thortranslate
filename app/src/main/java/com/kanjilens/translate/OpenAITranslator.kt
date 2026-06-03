@@ -26,6 +26,9 @@ sealed class TranslateResult {
     data class Error(val message: String) : TranslateResult()
 }
 
+/** Thrown when an API call returns a non-2xx response, carrying a user-facing message. */
+private class TranslateApiException(message: String) : Exception(message)
+
 class ScreenTranslator(
     private val textRecognizer: TextRecognizer,
 ) {
@@ -159,6 +162,8 @@ class ScreenTranslator(
                 } else {
                     TranslateResult.Error("Translation failed. Check your API key.")
                 }
+            } catch (e: TranslateApiException) {
+                TranslateResult.Error(e.message ?: "Translation failed")
             } catch (e: UnknownHostException) {
                 TranslateResult.Error("No internet connection")
             } catch (e: java.net.SocketTimeoutException) {
@@ -226,6 +231,28 @@ class ScreenTranslator(
         }
     }
 
+    /** Maps an HTTP error from OpenAI/Gemini to a clear, user-facing message. */
+    private fun httpErrorMessage(code: Int, body: String?): String {
+        return when (code) {
+            429 -> "Rate limit reached — the free tier allows only a few requests per minute. Wait a minute and try again."
+            401, 403 -> "API key rejected. Check your API key in Settings."
+            in 500..599 -> "The translation service is temporarily unavailable. Try again shortly."
+            else -> ("Translation failed (HTTP $code). " + (apiErrorDetail(body) ?: "")).trim()
+        }
+    }
+
+    /** Extracts the `error.message` field that both OpenAI and Gemini return on failure. */
+    private fun apiErrorDetail(body: String?): String? {
+        if (body.isNullOrBlank()) return null
+        return try {
+            JSONObject(body).optJSONObject("error")
+                ?.optString("message")
+                ?.takeIf { it.isNotBlank() }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     private fun callOpenAI(base64Image: String, apiKey: String, systemPrompt: String): String? {
         val body = JSONObject().apply {
             put("model", "gpt-4o-mini")
@@ -262,8 +289,11 @@ class ScreenTranslator(
             .build()
 
         val response = client.newCall(request).execute()
-        val responseBody = response.body?.string() ?: return null
-        if (!response.isSuccessful) return null
+        val responseBody = response.body?.string()
+        if (!response.isSuccessful) {
+            throw TranslateApiException(httpErrorMessage(response.code, responseBody))
+        }
+        if (responseBody == null) return null
 
         val json = JSONObject(responseBody)
         val choices = json.getJSONArray("choices")
@@ -308,8 +338,11 @@ class ScreenTranslator(
             .build()
 
         val response = client.newCall(request).execute()
-        val responseBody = response.body?.string() ?: return null
-        if (!response.isSuccessful) return null
+        val responseBody = response.body?.string()
+        if (!response.isSuccessful) {
+            throw TranslateApiException(httpErrorMessage(response.code, responseBody))
+        }
+        if (responseBody == null) return null
 
         val json = JSONObject(responseBody)
         val candidates = json.optJSONArray("candidates") ?: return null
