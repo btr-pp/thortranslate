@@ -28,6 +28,9 @@ class AppSettings(context: Context) {
         const val TRANSLATE_STYLE_AUTO = 0
         const val TRANSLATE_STYLE_TRANSLATE_ONLY = 1
         const val TRANSLATE_STYLE_TRANSLATE_AND_EXPLAIN = 2
+        // Text mode: OCR the screen first, then send only the recognized text to the
+        // LLM for a plain (translate-only) translation — cheaper than sending the image.
+        const val TRANSLATE_STYLE_TEXT = 3
 
         const val MODEL_GPT4O_MINI = 0
         const val MODEL_GEMINI_FLASH = 1

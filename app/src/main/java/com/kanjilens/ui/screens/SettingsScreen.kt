@@ -246,6 +246,20 @@ fun SettingsScreen(
                             onClick = { settings.setTranslateStyle(AppSettings.TRANSLATE_STYLE_TRANSLATE_AND_EXPLAIN) },
                             modifier = Modifier.weight(1f),
                         )
+                        SettingsOption(
+                            label = "Text",
+                            selected = translateStyle == AppSettings.TRANSLATE_STYLE_TEXT,
+                            onClick = { settings.setTranslateStyle(AppSettings.TRANSLATE_STYLE_TEXT) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    if (translateStyle == AppSettings.TRANSLATE_STYLE_TEXT) {
+                        Text(
+                            text = "OCRs the screen and sends only the text to the AI (cheaper, faster, translate-only — no on-screen explanation).",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
                     }
                 }
             }

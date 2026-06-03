@@ -4,10 +4,11 @@ Android app for translating and understanding foreign-language game screens in r
 
 ## What it does
 
-**Translate mode** (primary) — Captures a screenshot of the top screen and translates it. Works with any language (Japanese, Chinese, Korean, etc). Three translation styles available with AI models:
+**Translate mode** (primary) — Captures a screenshot of the top screen and translates it. Works with any language (Japanese, Chinese, Korean, etc). Translation styles available with AI models:
 - **Auto** (default): Translates and explains what to do next
 - **Translate**: Just translates the text, no extra explanation
 - **Explain**: Full translation with detailed guidance on how to progress
+- **Text**: OCRs the screen and sends only the text (not the image) to the AI — cheaper and faster, translate-only
 
 **JP Dictionary mode** — Offline Japanese word-by-word breakdown. Captures text via OCR, tokenizes it, and looks up each word in a 212K-entry dictionary (JMDict). Shows kanji, reading, meaning, and JLPT level. No internet required.
 
@@ -66,7 +67,7 @@ echo "sdk.dir=$HOME/Android/sdk" > local.properties
 2. The default model is **Offline (ML Kit)** — works immediately, no API key needed
 3. To use AI models: tap **...** (top right) → Settings → choose Gemini Flash or GPT-4o mini → paste your API key
 4. Choose your output language (default: English)
-5. Choose your preferred translation style for AI models (Auto/Translate/Explain)
+5. Choose your preferred translation style for AI models (Auto/Translate/Explain/Text)
 6. Adjust text size if needed (S/M/L)
 
 ## Usage
