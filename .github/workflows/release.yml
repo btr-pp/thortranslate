@@ -27,22 +27,35 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # 版號以 git tag 為單一來源:推 vX.Y.Z 時用 tag 名;手動執行(無 tag)時 fallback
+      # 回 build.gradle.kts 的 versionName。versionCode 由 semver 換算成單調遞增整數。
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
+          fi
+          IFS='.' read -r MA MI PA <<< "$VERSION"
+          CODE=$(( ${MA:-0}*10000 + ${MI:-0}*100 + ${PA:-0} ))
+          [ "$CODE" -le 0 ] && CODE=1
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+
       # debug 簽章:用內建的 debug keystore 簽章,產出可直接安裝的 APK。
       - name: Build debug APK
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleDebug -PversionName=${{ steps.ver.outputs.version }} -PversionCode=${{ steps.ver.outputs.code }} --no-daemon
 
       - name: Rename APK
-        id: rename
         run: |
-          VERSION=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk "dist/ThorLens-v${VERSION}.apk"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/ThorLens-v${{ steps.ver.outputs.version }}.apk"
 
       - name: Upload APK as build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ThorLens-v${{ steps.rename.outputs.version }}
+          name: ThorLens-v${{ steps.ver.outputs.version }}
           path: dist/ThorLens-*.apk
 
       # 只有在「推標籤」時才建立 Release(手動執行只會產出上面的 artifact)。

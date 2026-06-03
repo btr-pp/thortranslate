@@ -12,8 +12,10 @@ android {
         applicationId = "com.kanjilens"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0"
+        // Version is supplied by CI from the git tag (see .github/workflows/release.yml);
+        // the literals below are the fallback for local/dev builds without -P overrides.
+        versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 3
+        versionName = (project.findProperty("versionName") as String?) ?: "0.3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
