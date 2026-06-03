@@ -302,8 +302,10 @@ fun MainScreen(
 
         onTranslateStateChange(CaptureState.Processing)
 
-        when (val result = translator.translateScreen(
-            bitmap, "", AppSettings.TRANSLATE_STYLE_AUTO, AppSettings.MODEL_MLKIT_OFFLINE, outputLanguage,
+        // Reuse the blocks already recognized above for dedup instead of OCR'ing
+        // the same bitmap again inside translateScreen/translateOffline.
+        when (val result = translator.translateBlocksOffline(
+            blocks, outputLanguage,
             onDownloading = { onTranslateStateChange(CaptureState.DownloadingModel) },
         )) {
             is TranslateResult.Success -> {
