@@ -12,8 +12,8 @@ android {
         applicationId = "com.kanjilens"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -69,6 +69,9 @@ dependencies {
 
     // ML Kit - Japanese text recognition
     implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
+
+    // ML Kit - Latin-script text recognition (for English dictionary mode)
+    implementation("com.google.mlkit:text-recognition:16.0.1")
 
     // ML Kit - On-device translation
     implementation("com.google.mlkit:translate:17.0.3")

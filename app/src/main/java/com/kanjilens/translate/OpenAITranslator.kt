@@ -42,6 +42,7 @@ class ScreenTranslator(
         .build()
 
     private var mlKitTranslator: com.google.mlkit.nl.translate.Translator? = null
+    private var mlKitCurrentSourceLang: String? = null
     private var mlKitCurrentTargetLang: String? = null
 
     private fun mlKitLanguageCode(appLangCode: String): String {
@@ -55,24 +56,79 @@ class ScreenTranslator(
             AppSettings.LANG_CHINESE -> TranslateLanguage.CHINESE
             AppSettings.LANG_KOREAN -> TranslateLanguage.KOREAN
             AppSettings.LANG_RUSSIAN -> TranslateLanguage.RUSSIAN
+            AppSettings.DICT_LANG_JAPANESE -> TranslateLanguage.JAPANESE
             else -> TranslateLanguage.ENGLISH
         }
     }
 
-    suspend fun ensureOfflineModelReady(targetLang: String = AppSettings.LANG_ENGLISH) {
-        val mlKitLang = mlKitLanguageCode(targetLang)
-        if (mlKitTranslator != null && mlKitCurrentTargetLang == mlKitLang) return
+    suspend fun ensureOfflineModelReady(
+        targetLang: String = AppSettings.LANG_ENGLISH,
+        sourceLang: String = AppSettings.DICT_LANG_JAPANESE,
+    ) {
+        val mlKitSource = mlKitLanguageCode(sourceLang)
+        val mlKitTarget = mlKitLanguageCode(targetLang)
+        if (mlKitTranslator != null &&
+            mlKitCurrentSourceLang == mlKitSource &&
+            mlKitCurrentTargetLang == mlKitTarget
+        ) {
+            return
+        }
         withContext(Dispatchers.IO) {
             mlKitTranslator?.close()
             val options = TranslatorOptions.Builder()
-                .setSourceLanguage(TranslateLanguage.JAPANESE)
-                .setTargetLanguage(mlKitLang)
+                .setSourceLanguage(mlKitSource)
+                .setTargetLanguage(mlKitTarget)
                 .build()
             val translator = Translation.getClient(options)
             val conditions = DownloadConditions.Builder().build()
             translator.downloadModelIfNeeded(conditions).await()
             mlKitTranslator = translator
-            mlKitCurrentTargetLang = mlKitLang
+            mlKitCurrentSourceLang = mlKitSource
+            mlKitCurrentTargetLang = mlKitTarget
+        }
+    }
+
+    /**
+     * Translates a list of short texts (words or dictionary glosses) from
+     * [sourceLang] to [targetLang] using the offline ML Kit model. Returns a
+     * map of original text -> translation. Inputs are de-duplicated; blanks are
+     * skipped. On model-download failure an empty map is returned so callers can
+     * gracefully fall back to the original text.
+     */
+    suspend fun translateBatch(
+        texts: List<String>,
+        sourceLang: String,
+        targetLang: String,
+        onDownloading: (() -> Unit)? = null,
+    ): Map<String, String> {
+        val unique = texts.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (unique.isEmpty()) return emptyMap()
+
+        val mlKitSource = mlKitLanguageCode(sourceLang)
+        val mlKitTarget = mlKitLanguageCode(targetLang)
+        val needsDownload = mlKitTranslator == null ||
+            mlKitCurrentSourceLang != mlKitSource ||
+            mlKitCurrentTargetLang != mlKitTarget
+        if (needsDownload) {
+            withContext(Dispatchers.Main) { onDownloading?.invoke() }
+        }
+
+        return withContext(Dispatchers.IO) {
+            try {
+                ensureOfflineModelReady(targetLang, sourceLang)
+            } catch (e: Exception) {
+                return@withContext emptyMap()
+            }
+            val translator = mlKitTranslator ?: return@withContext emptyMap()
+            val result = HashMap<String, String>(unique.size)
+            for (text in unique) {
+                try {
+                    result[text] = translator.translate(text).await()
+                } catch (e: Exception) {
+                    // Leave this word out; caller falls back to original.
+                }
+            }
+            result
         }
     }
 
@@ -126,7 +182,9 @@ class ScreenTranslator(
             return TranslateResult.Error("No text found in screenshot")
         }
 
-        val needsDownload = mlKitTranslator == null || mlKitCurrentTargetLang != mlKitLanguageCode(outputLanguage)
+        val needsDownload = mlKitTranslator == null ||
+            mlKitCurrentSourceLang != TranslateLanguage.JAPANESE ||
+            mlKitCurrentTargetLang != mlKitLanguageCode(outputLanguage)
         if (needsDownload) {
             withContext(Dispatchers.Main) { onDownloading?.invoke() }
         }
