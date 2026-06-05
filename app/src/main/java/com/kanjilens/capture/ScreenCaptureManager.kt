@@ -79,12 +79,17 @@ class ScreenCaptureManager(private val context: Context) {
     /**
      * Capture the current screen.
      *
-     * @param forceFreshFrame when true (single-shot captures), the VirtualDisplay is
-     *   recreated so a frame is guaranteed even on a static screen. Auto-translate
-     *   passes false so it reuses the persistent display and simply waits for the next
-     *   frame — if nothing changed within the timeout it returns null and the cycle is
-     *   skipped, which avoids per-second resource churn.
+     * The persistent VirtualDisplay is kept with NO output surface between captures, so
+     * it does no mirroring/compositing while idle. We attach the ImageReader surface only
+     * for the brief moment needed to grab one frame, then detach again. This avoids both
+     * per-second VirtualDisplay churn AND continuous full-screen mirroring — the latter
+     * matters a lot under a running game, where the compositor (SurfaceFlinger) is already
+     * saturated and an always-on mirror can tip the whole device into a freeze.
+     *
+     * @param forceFreshFrame retained for source compatibility; capture always renders a
+     *   fresh frame now (attaching the surface re-composites current screen content).
      */
+    @Suppress("UNUSED_PARAMETER")
     suspend fun captureScreen(forceFreshFrame: Boolean = true): Bitmap? {
         val projection = mediaProjection
         if (projection == null) {
@@ -95,34 +100,49 @@ class ScreenCaptureManager(private val context: Context) {
         val metrics = getScreenMetrics()
         if (!ensureCaptureResources(projection, metrics)) return null
         val reader = imageReader ?: return null
-
-        if (forceFreshFrame) {
-            // Guarantee a brand-new frame for on-demand captures.
-            recreateVirtualDisplay(projection)
-        }
+        val display = virtualDisplay ?: return null
 
         val width = captureWidth
         val height = captureHeight
 
+        // All surface toggles and ImageReader reads run on the single capture handler
+        // thread (FIFO ordered) so attach/detach never race the frame reads.
         return withTimeoutOrNull(CAPTURE_TIMEOUT_MS) {
-            suspendCancellableCoroutine { continuation ->
-                val tryAcquire = Runnable {
-                    if (continuation.isActive) {
-                        val image = reader.acquireLatestImage()
-                        if (image != null) {
-                            reader.setOnImageAvailableListener(null, handler)
-                            val bitmap = imageToBitmap(image, width, height)
-                            image.close()
-                            if (continuation.isActive) continuation.resume(bitmap)
+            try {
+                suspendCancellableCoroutine { continuation ->
+                    val tryAcquire = Runnable {
+                        if (continuation.isActive) {
+                            val image = reader.acquireLatestImage()
+                            if (image != null) {
+                                reader.setOnImageAvailableListener(null, handler)
+                                val bitmap = imageToBitmap(image, width, height)
+                                image.close()
+                                if (continuation.isActive) continuation.resume(bitmap)
+                            }
                         }
                     }
+                    reader.setOnImageAvailableListener({ tryAcquire.run() }, handler)
+                    // Attach the output surface to render the current screen into our
+                    // reader; detached again in the finally below once we have a frame.
+                    handler.post { runCatching { display.setSurface(reader.surface) } }
+                    continuation.invokeOnCancellation {
+                        reader.setOnImageAvailableListener(null, handler)
+                    }
                 }
-                reader.setOnImageAvailableListener({ tryAcquire.run() }, handler)
-                // Also drain any frame already sitting in the buffer (e.g. content
-                // changed during the gap between cycles before the listener was set).
-                handler.post(tryAcquire)
-                continuation.invokeOnCancellation {
-                    reader.setOnImageAvailableListener(null, handler)
+            } finally {
+                // Stop mirroring as soon as we're done so we don't keep loading the GPU,
+                // then drain any frames the source pushed before the detach took effect —
+                // otherwise a full buffer would stall the producer and the next capture
+                // (its listener never fires) would time out.
+                handler.post {
+                    runCatching {
+                        display.setSurface(null)
+                        var leftover = reader.acquireLatestImage()
+                        while (leftover != null) {
+                            leftover.close()
+                            leftover = reader.acquireLatestImage()
+                        }
+                    }
                 }
             }
         }
@@ -152,37 +172,22 @@ class ScreenCaptureManager(private val context: Context) {
         val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
         imageReader = reader
         return try {
-            virtualDisplay = projection.createVirtualDisplay(
+            val display = projection.createVirtualDisplay(
                 "KanjiLensCapture",
                 width, height, density,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 reader.surface,
                 null, null,
             )
+            // Start idle: no output surface means no mirroring until a capture attaches one.
+            display?.setSurface(null)
+            virtualDisplay = display
             Log.d(TAG, "Capture resources created: ${width}x${height} @ ${density}dpi")
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create VirtualDisplay", e)
             releaseCaptureResources()
             false
-        }
-    }
-
-    /** Recreate only the VirtualDisplay on the existing reader surface to force a frame. */
-    private fun recreateVirtualDisplay(projection: MediaProjection) {
-        val reader = imageReader ?: return
-        virtualDisplay?.release()
-        virtualDisplay = try {
-            projection.createVirtualDisplay(
-                "KanjiLensCapture",
-                captureWidth, captureHeight, captureDensity,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                reader.surface,
-                null, null,
-            )
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to recreate VirtualDisplay", e)
-            null
         }
     }
 
