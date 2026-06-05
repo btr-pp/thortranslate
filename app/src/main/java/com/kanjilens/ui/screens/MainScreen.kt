@@ -299,8 +299,8 @@ fun MainScreen(
     // so the caller can serialize cycles — overlapping cycles would race on the
     // shared ScreenCaptureManager state and stall, breaking auto updates.
     suspend fun doAutoTranslateCycle() {
-        // Reuse the persistent VirtualDisplay (no per-second churn); a null result just
-        // means the screen hasn't changed, so skip this cycle.
+        // Reuse the persistent VirtualDisplay (no per-second churn); identical frames are
+        // filtered later by the OCR dedup. A null result means capture failed/timed out.
         val fullBitmap = captureManager.captureScreen(forceFreshFrame = false) ?: return
 
         val bitmap = cropBitmap(fullBitmap)
