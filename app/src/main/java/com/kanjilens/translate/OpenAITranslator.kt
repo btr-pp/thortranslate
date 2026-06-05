@@ -564,8 +564,13 @@ class ScreenTranslator(
         } else {
             bitmap
         }
-        scaled.compress(Bitmap.CompressFormat.JPEG, 80, stream)
-        return Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+        try {
+            scaled.compress(Bitmap.CompressFormat.JPEG, 80, stream)
+            return Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+        } finally {
+            // Free the downscaled copy; never recycle the caller-owned original.
+            if (scaled !== bitmap) scaled.recycle()
+        }
     }
 
     private fun getSystemPrompt(style: Int, outputLanguage: String = AppSettings.LANG_ENGLISH): String {
