@@ -43,6 +43,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import com.kanjilens.analysis.DictionaryLookup
 import com.kanjilens.analysis.EnglishDictionaryLookup
 import com.kanjilens.analysis.EnglishTokenizer
@@ -61,7 +64,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import com.kanjilens.ui.components.CaptureButton
 import com.kanjilens.ui.components.TranslationResultView
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -105,7 +107,10 @@ fun MainScreen(
     }
 
     val isAutoMode = aiModel == AppSettings.MODEL_MLKIT_OFFLINE_AUTO
-    var autoJob by remember { mutableStateOf<Job?>(null) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    // Compose state mirror of captureManager.isReady so the auto loop starts once the
+    // MediaProjection arrives (isReady is a plain getter and can't trigger recomposition).
+    var projectionReady by remember { mutableStateOf(captureManager.isReady) }
     var lastOcrText by remember { mutableStateOf<String?>(null) }
 
     fun isSignificantChange(oldText: String, newText: String): Boolean {
@@ -123,9 +128,9 @@ fun MainScreen(
         return similarity < 0.8f
     }
 
+    // Leaving Auto mode flips isAutoMode false, which cancels the lifecycle-bound loop
+    // below (its finally releases the capture resources).
     fun stopAutoMode() {
-        autoJob?.cancel()
-        autoJob = null
         lastOcrText = null
         settings.setAiModel(AppSettings.MODEL_MLKIT_OFFLINE)
     }
@@ -219,22 +224,27 @@ fun MainScreen(
             }
 
             val bitmap = cropBitmap(fullBitmap)
-            onDictionaryStateChange(CaptureState.Processing)
+            try {
+                onDictionaryStateChange(CaptureState.Processing)
 
-            val isEnglish = dictLanguage == AppSettings.DICT_LANG_ENGLISH
-            val script = if (isEnglish) TextRecognizer.SCRIPT_LATIN else TextRecognizer.SCRIPT_JAPANESE
-            val recognizedText = textRecognizer.recognizeText(bitmap, script)
-            if (recognizedText != null) {
-                val words = if (isEnglish) lookupEnglish(recognizedText) else lookupJapanese(recognizedText)
-                onDictionaryStateChange(CaptureState.DictionarySuccess(
-                    AnalysisResult(
-                        originalText = recognizedText,
-                        words = words,
-                    )
-                ))
-            } else {
-                val msg = if (isEnglish) "No text found in screenshot" else "No Japanese text found in screenshot"
-                onDictionaryStateChange(CaptureState.Error(msg))
+                val isEnglish = dictLanguage == AppSettings.DICT_LANG_ENGLISH
+                val script = if (isEnglish) TextRecognizer.SCRIPT_LATIN else TextRecognizer.SCRIPT_JAPANESE
+                val recognizedText = textRecognizer.recognizeText(bitmap, script)
+                if (recognizedText != null) {
+                    val words = if (isEnglish) lookupEnglish(recognizedText) else lookupJapanese(recognizedText)
+                    onDictionaryStateChange(CaptureState.DictionarySuccess(
+                        AnalysisResult(
+                            originalText = recognizedText,
+                            words = words,
+                        )
+                    ))
+                } else {
+                    val msg = if (isEnglish) "No text found in screenshot" else "No Japanese text found in screenshot"
+                    onDictionaryStateChange(CaptureState.Error(msg))
+                }
+            } finally {
+                if (bitmap !== fullBitmap) bitmap.recycle()
+                fullBitmap.recycle()
             }
         }
     }
@@ -254,20 +264,25 @@ fun MainScreen(
             }
 
             val bitmap = cropBitmap(fullBitmap)
-            onTranslateStateChange(CaptureState.Processing)
+            try {
+                onTranslateStateChange(CaptureState.Processing)
 
-            when (val result = translator.translateScreen(
-                bitmap, apiKey, translateStyle, aiModel, outputLanguage,
-                onDownloading = { onTranslateStateChange(CaptureState.DownloadingModel) },
-            )) {
-                is TranslateResult.Success -> {
-                    onTranslateStateChange(CaptureState.TranslateSuccess(
-                        TranslationResult(translation = result.text)
-                    ))
+                when (val result = translator.translateScreen(
+                    bitmap, apiKey, translateStyle, aiModel, outputLanguage,
+                    onDownloading = { onTranslateStateChange(CaptureState.DownloadingModel) },
+                )) {
+                    is TranslateResult.Success -> {
+                        onTranslateStateChange(CaptureState.TranslateSuccess(
+                            TranslationResult(translation = result.text)
+                        ))
+                    }
+                    is TranslateResult.Error -> {
+                        onTranslateStateChange(CaptureState.Error(result.message))
+                    }
                 }
-                is TranslateResult.Error -> {
-                    onTranslateStateChange(CaptureState.Error(result.message))
-                }
+            } finally {
+                if (bitmap !== fullBitmap) bitmap.recycle()
+                fullBitmap.recycle()
             }
         }
     }
@@ -284,63 +299,76 @@ fun MainScreen(
     // so the caller can serialize cycles — overlapping cycles would race on the
     // shared ScreenCaptureManager state and stall, breaking auto updates.
     suspend fun doAutoTranslateCycle() {
-        val fullBitmap = captureManager.captureScreen() ?: return
+        // Reuse the persistent VirtualDisplay (no per-second churn); a null result just
+        // means the screen hasn't changed, so skip this cycle.
+        val fullBitmap = captureManager.captureScreen(forceFreshFrame = false) ?: return
 
         val bitmap = cropBitmap(fullBitmap)
+        try {
+            // Get OCR text first for dedup
+            val blocks = textRecognizer.recognizeTextBlocks(bitmap)
+            if (blocks.isNullOrEmpty()) return
 
-        // Get OCR text first for dedup
-        val blocks = textRecognizer.recognizeTextBlocks(bitmap)
-        if (blocks.isNullOrEmpty()) return
+            val currentText = blocks.joinToString("")
+                .filter { c -> c.code > 0x3000 } // Keep only CJK chars for dedup
 
-        val currentText = blocks.joinToString("")
-            .filter { c -> c.code > 0x3000 } // Keep only CJK chars for dedup
+            if (currentText.isEmpty()) return
 
-        if (currentText.isEmpty()) return
-
-        if (!isSignificantChange(lastOcrText ?: "", currentText)) {
-            return // Text hasn't changed, skip
-        }
-        lastOcrText = currentText
-
-        onTranslateStateChange(CaptureState.Processing)
-
-        // Reuse the blocks already recognized above for dedup instead of OCR'ing
-        // the same bitmap again inside translateScreen/translateOffline.
-        when (val result = translator.translateBlocksOffline(
-            blocks, outputLanguage,
-            onDownloading = { onTranslateStateChange(CaptureState.DownloadingModel) },
-        )) {
-            is TranslateResult.Success -> {
-                onTranslateStateChange(CaptureState.TranslateSuccess(
-                    TranslationResult(translation = result.text)
-                ))
+            if (!isSignificantChange(lastOcrText ?: "", currentText)) {
+                return // Text hasn't changed, skip
             }
-            is TranslateResult.Error -> {
-                onTranslateStateChange(CaptureState.Error(result.message))
-            }
-        }
-    }
+            lastOcrText = currentText
 
-    fun startAutoMode() {
-        if (autoJob?.isActive == true) return
-        lastOcrText = null
-        autoJob = scope.launch {
-            // await each cycle before the next so only one capture runs at a time
-            while (isActive) {
-                if (captureManager.isReady) {
-                    doAutoTranslateCycle()
+            onTranslateStateChange(CaptureState.Processing)
+
+            // Reuse the blocks already recognized above for dedup instead of OCR'ing
+            // the same bitmap again inside translateScreen/translateOffline.
+            when (val result = translator.translateBlocksOffline(
+                blocks, outputLanguage,
+                onDownloading = { onTranslateStateChange(CaptureState.DownloadingModel) },
+            )) {
+                is TranslateResult.Success -> {
+                    onTranslateStateChange(CaptureState.TranslateSuccess(
+                        TranslationResult(translation = result.text)
+                    ))
                 }
-                delay(1000L)
+                is TranslateResult.Error -> {
+                    onTranslateStateChange(CaptureState.Error(result.message))
+                }
             }
+        } finally {
+            // Free the per-cycle bitmaps so auto mode doesn't accumulate native memory.
+            if (bitmap !== fullBitmap) bitmap.recycle()
+            fullBitmap.recycle()
         }
     }
 
-    // Navigating away disposes this composable and cancels the coroutine scope (and
-    // autoJob). When we return while still in Auto mode with projection ready, resume
-    // the loop so updates keep flowing instead of silently stopping.
-    LaunchedEffect(isAutoMode, captureManager.isReady) {
-        if (isAutoMode && captureManager.isReady && autoJob?.isActive != true) {
-            startAutoMode()
+    // The auto-translate loop is bound to the activity lifecycle: repeatOnLifecycle
+    // cancels it whenever the app leaves the foreground (screen lock / backgrounding)
+    // and restarts it on return. This stops the loop from capturing — and recreating
+    // display resources — while the screen is locked, which was the source of the
+    // system freeze, and removes any chance of duplicate loops.
+    LaunchedEffect(isAutoMode, projectionReady) {
+        if (isAutoMode && projectionReady) {
+            try {
+                lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                    lastOcrText = null
+                    try {
+                        // await each cycle before the next so only one capture runs at a time
+                        while (isActive) {
+                            if (captureManager.isReady) {
+                                doAutoTranslateCycle()
+                            }
+                            delay(1000L)
+                        }
+                    } finally {
+                        // Don't hold a VirtualDisplay across the screen-power transition.
+                        captureManager.pauseCapture()
+                    }
+                }
+            } finally {
+                captureManager.pauseCapture()
+            }
         }
     }
 
@@ -362,6 +390,7 @@ fun MainScreen(
             if (pendingCropAfterPermission) {
                 pendingCropAfterPermission = false
                 captureManager.awaitProjectionReady {
+                    projectionReady = true
                     scope.launch {
                         val bmp = captureManager.captureScreen()
                         if (bmp != null) onCropClick(bmp)
@@ -369,12 +398,14 @@ fun MainScreen(
                 }
             } else if (pendingAutoAfterPermission) {
                 pendingAutoAfterPermission = false
+                // Auto loop starts via the lifecycle-bound LaunchedEffect once ready.
                 captureManager.awaitProjectionReady {
-                    startAutoMode()
+                    projectionReady = true
                 }
             } else {
                 onCaptureStateChange(CaptureState.Capturing)
                 captureManager.awaitProjectionReady {
+                    projectionReady = true
                     doCapture()
                 }
             }
@@ -487,7 +518,8 @@ fun MainScreen(
                                     settings.setAiModel(AppSettings.MODEL_MLKIT_OFFLINE_AUTO)
                                     modelMenuExpanded = false
                                     if (captureManager.isReady) {
-                                        startAutoMode()
+                                        // Auto loop starts via the lifecycle-bound LaunchedEffect.
+                                        projectionReady = true
                                     } else {
                                         pendingAutoAfterPermission = true
                                         val intent = captureManager.projectionManager.createScreenCaptureIntent()

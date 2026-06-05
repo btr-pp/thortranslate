@@ -1,5 +1,6 @@
 package com.kanjilens
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -99,9 +100,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStop() {
+        super.onStop()
+        // Screen lock / backgrounding: don't hold a VirtualDisplay across the
+        // screen-power transition. The MediaProjection stays alive for resume.
+        captureManager.pauseCapture()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         captureManager.release()
         textRecognizer.close()
+        stopService(Intent(this, com.kanjilens.capture.ScreenCaptureService::class.java))
     }
 }
